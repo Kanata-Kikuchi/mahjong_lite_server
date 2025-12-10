@@ -6,6 +6,28 @@ const wss = new WebSocket.Server({ port: PORT });
 
 const rooms = {};
 
+/*
+rooms[roomId] = {
+  roomId: ,
+  rule: ,
+  roound: ,
+  reach: ,
+  game: ,
+  gameSet: ,
+  roundTable: ,
+  gameScore: ,
+  score: ,
+  players: [
+    {
+      playerId: ,
+      seat: ,
+      name: ,
+      socket: ,
+    },
+  ],
+};
+*/
+
 function generateId(length = 6) {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let roomId = '';
@@ -53,7 +75,7 @@ function broadcastGameState(roomId) {
     reach: room.reach,
     gameSet: room.gameSet,
     roundTable: room.roundTable,
-    gameScore: room.gameScore,
+    comment: room.comment,
     score: room.score,
   };
 
@@ -63,7 +85,26 @@ function broadcastGameState(roomId) {
   });
 
   room.players.forEach(player => {
-    if (player.socket.readyState === WebSocket.OPEN) { //  && player.seat != 'ton'.
+    if (player.socket.readyState === WebSocket.OPEN && player.seat != 'ton') { //  && player.seat != 'ton'.
+      player.socket.send(msg);
+    }
+  });
+}
+
+function broadcastGameFinish(roomId) {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const msg = JSON.stringify({
+    type: 'game_finish',
+    payload: {
+      gameScore: room.gameScore,
+      players: room.players,
+    },
+  });
+
+  room.players.forEach(player => {
+    if (player.socket.readyState === WebSocket.OPEN) {
       player.socket.send(msg);
     }
   });
@@ -197,7 +238,7 @@ function inputRound(socket, payload) {
   room.reach = payload.reach;
   room.gameSet = payload.gameSet;
   room.roundTable = payload.roundTable;
-  room.gameScore = payload.gameScore;
+  room.comment = payload.comment;
   room.score = payload.score;
 
   broadcastGameState(roomId);
@@ -239,9 +280,7 @@ function removeRoom(payload) {
     }
   });
 
-  if (rooms[roomId]) {
-    delete rooms[roomId];
-  }
+  delete rooms[roomId];
 }
 
 function pulloutPlayer(socket, payload) {
@@ -269,6 +308,30 @@ function pulloutPlayer(socket, payload) {
 
   broadcastRoomState(roomId);
 };
+
+function updateSeat(payload) {
+  const roomId = payload.roomId;
+  const room = rooms[roomId];
+
+  if (!room) return;
+  
+  const newPlayers = payload.players.map(id =>
+    room.players.find(player => player.playerId === id)
+  );
+
+  const seats = ['ton', 'nan', 'sya', 'pei'];
+
+  newPlayers.forEach((player, index) => {
+    if (player) {
+      player.seat = seats[index];
+    }
+  });
+
+  room.players = newPlayers;
+  room.gameScore = payload.gameScore;
+
+  broadcastGameFinish(roomId);
+}
 
 wss.on('connection', (socket) => {
   console.log('client connected');
@@ -315,7 +378,13 @@ wss.on('connection', (socket) => {
         break;
 
       case 'exit_room':
+        console.log('exit_room を受信');
         pulloutPlayer(socket, payload);
+        break;
+
+      case 'initiative_check':
+        console.log('initiative_check を受信');
+        updateSeat();
         break;
 
       default:
