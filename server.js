@@ -333,15 +333,13 @@ function pulloutPlayer(socket, payload) {
   broadcastRoomState(roomId);
 };
 
-function updateSeat(payload) { // 親決め（試合終了→次試合へ）
+function updateSeat(payload) { // 親決め（試合終了→次試合へ）.
   const roomId = payload.roomId;
   const room = rooms[roomId];
   if (!room) return;
 
-  // ✅ gameNoはサーバー主導（クライアントから受け取らない）
   room.gameNo = (typeof room.gameNo === 'number') ? (room.gameNo + 1) : 2;
 
-  // ✅ 履歴は「空/undefined/null」で上書きしない
   if (Array.isArray(payload.scoreMemory) && payload.scoreMemory.length > 0) {
     room.scoreMemory = payload.scoreMemory;
   }
@@ -352,15 +350,13 @@ function updateSeat(payload) { // 親決め（試合終了→次試合へ）
     room.gameScore = payload.gameScore;
   }
 
-  // ✅ newSeat は必須：席順が壊れると復帰が壊れる
   if (!Array.isArray(payload.newSeat) || payload.newSeat.length !== 4) {
-    console.error('updateSeat: invalid newSeat', payload.newSeat);
+    // console.error('updateSeat: invalid newSeat', payload.newSeat);
     return;
   }
 
   room.newSeat = payload.newSeat;
 
-  // playerId順に並べ替え
   const newPlayers = payload.newSeat
     .map(id => room.players.find(player => player.playerId === id))
     .filter(Boolean);
@@ -416,9 +412,6 @@ function finishSession(payload) {
   delete rooms[roomId];
 }
 
-
-
-
 function sendResumeResult(socket, payload) {
   socket.send(JSON.stringify({
     type: 'resume_result',
@@ -454,20 +447,19 @@ function resumeRoom(socket, payload) {
     .map(s => room.players.find(p => p.seat === s)?.playerId)
     .filter(Boolean);
 
-  //
+  
   const resPayload = {
     ok: true,
     boot: room.started ? 'share' : 'room',
     snapshot: { /* 既存 */ }
   };
 
-  console.log('resume_result payload:', resPayload.boot, resPayload.ok, {
-    started: room.started,
-    phase: room.phase,
-    gameNo: room.gameNo,
-    players: room.players.length,
-  });
-  //
+  // console.log('resume_result payload:', resPayload.boot, resPayload.ok, {
+  //   started: room.started,
+  //   phase: room.phase,
+  //   gameNo: room.gameNo,
+  //   players: room.players.length,
+  // });
 
   sendResumeResult(socket, {
     ok: true,
@@ -504,14 +496,6 @@ function resumeRoom(socket, payload) {
   });
 }
 
-
-
-
-
-
-
-
-
 wss.on('connection', (socket) => {
   console.log('client connected');
 
@@ -540,52 +524,52 @@ wss.on('connection', (socket) => {
 
     switch (type) {
       case 'create_room':
-        console.log('create_room を受信');
+        // console.log('create_room を受信');
         createRoom(socket, payload);
         break;
 
       case 'join_room':
-        console.log('join_room を受信');
+        // console.log('join_room を受信');
         joinRoom(socket, payload);
         break;
 
       case 'input_round':
-        console.log('input_round を受信');
+        // console.log('input_round を受信');
         inputRound(socket, payload);
         break;
 
       case 'start_game':
-        console.log('start_game を受信');
+        // console.log('start_game を受信');
         startGame(payload);
         break;
 
       case 'remove_room':
-        console.log('remove_room を受信');
+        // console.log('remove_room を受信');
         removeRoom(payload);
         break;
 
       case 'exit_room':
-        console.log('exit_room を受信');
+        // console.log('exit_room を受信');
         pulloutPlayer(socket, payload);
         break;
 
       case 'initiative_check':
-        console.log('initiative_check を受信');
+        // console.log('initiative_check を受信');
         updateSeat(payload);
         break;
 
       case 'change_seat':
-        console.log('change_seat を受信');
+        // console.log('change_seat を受信');
         changeSeat(payload);
         break;
 
       case 'finish_session':
-        console.log('finish_session を受信');
+        // console.log('finish_session を受信');
         finishSession(payload);
         break;
 
       case 'resume_room':
-        console.log('resume_room を受信');
+        // console.log('resume_room を受信');
         resumeRoom(socket, payload);
         break;
 
