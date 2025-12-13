@@ -1,4 +1,5 @@
 const WebSocket = require('ws');
+const crypto = require('crypto');
 
 const PORT = 3000;
 
@@ -9,14 +10,24 @@ const rooms = {};
 /*
 rooms[roomId] = {
   roomId: ,
+
   rule: ,
-  roound: ,
+
+  round: ,
   reach: ,
-  game: ,
   gameSet: ,
   roundTable: ,
-  gameScore: ,
+  comment ,
   score: ,
+
+  scoreMemory: ,
+  sum ,
+  gameScore: ,
+  newSeat ,
+  
+  started ,
+  game: ,
+
   players: [
     {
       playerId: ,
@@ -98,8 +109,10 @@ function broadcastGameFinish(roomId) {
   const msg = JSON.stringify({
     type: 'game_finish',
     payload: {
+      scoreMemory: room.scoreMemory,
+      sum: room.sum,
       gameScore: room.gameScore,
-      players: room.players,
+      newSeat: room.newSeat,
     },
   });
 
@@ -141,6 +154,10 @@ function createRoom(socket, payload) {
   rooms[roomId] = {
     roomId: roomId,
     rule: rule,
+    started: false,
+    gameNo: 1,
+    phase: 'between_games',
+    initialScore: null,
     players: [
       {
         playerId: playerId,
@@ -240,19 +257,26 @@ function inputRound(socket, payload) {
   room.roundTable = payload.roundTable;
   room.comment = payload.comment;
   room.score = payload.score;
+  room.phase = 'playing';
 
   broadcastGameState(roomId);
 }
 
-function stratGame(payload) {
+function startGame(payload) {
   const roomId = payload.roomId;
   const room = rooms[roomId];
   if (!room) return;
 
+  room.started = true;
+  room.phase = 'playing';
+  room.initialScore = payload.initialScore;
+
   const msg = JSON.stringify({
     type: 'game_start',
     payload: {
-      roomId: roomId
+      roomId: roomId,
+      rule: room.rule,
+      initialScore: payload.initialScore
     }
   });
 
@@ -295,7 +319,7 @@ function pulloutPlayer(socket, payload) {
   );
 
   const seats = ['ton', 'nan', 'sya', 'pei'];
-  room.playrers.forEach((player, index) => {
+  room.players.forEach((player, index) => {
     player.seat = seats[index]
   });
 
@@ -309,32 +333,195 @@ function pulloutPlayer(socket, payload) {
   broadcastRoomState(roomId);
 };
 
-function updateSeat(payload) {
+function updateSeat(payload) { // 親決め（試合終了→次試合へ）
   const roomId = payload.roomId;
   const room = rooms[roomId];
-
   if (!room) return;
-  
-  const newPlayers = payload.players.map(id =>
-    room.players.find(player => player.playerId === id)
-  );
+
+  // ✅ gameNoはサーバー主導（クライアントから受け取らない）
+  room.gameNo = (typeof room.gameNo === 'number') ? (room.gameNo + 1) : 2;
+
+  // ✅ 履歴は「空/undefined/null」で上書きしない
+  if (Array.isArray(payload.scoreMemory) && payload.scoreMemory.length > 0) {
+    room.scoreMemory = payload.scoreMemory;
+  }
+  if (Array.isArray(payload.sum) && payload.sum.length > 0) {
+    room.sum = payload.sum;
+  }
+  if (Array.isArray(payload.gameScore) && payload.gameScore.length > 0) {
+    room.gameScore = payload.gameScore;
+  }
+
+  // ✅ newSeat は必須：席順が壊れると復帰が壊れる
+  if (!Array.isArray(payload.newSeat) || payload.newSeat.length !== 4) {
+    console.error('updateSeat: invalid newSeat', payload.newSeat);
+    return;
+  }
+
+  room.newSeat = payload.newSeat;
+
+  // playerId順に並べ替え
+  const newPlayers = payload.newSeat
+    .map(id => room.players.find(player => player.playerId === id))
+    .filter(Boolean);
 
   const seats = ['ton', 'nan', 'sya', 'pei'];
-
   newPlayers.forEach((player, index) => {
-    if (player) {
-      player.seat = seats[index];
-    }
+    player.seat = seats[index];
   });
 
   room.players = newPlayers;
-  room.gameScore = payload.gameScore;
+  room.phase = 'between_games';
 
   broadcastGameFinish(roomId);
 }
 
+function changeSeat(payload) { // ルーム作成時の席決め.
+  const roomId = payload.roomId;
+  const room = rooms[roomId];
+
+  if (!room) return;
+
+  const order = payload.players.map(p => p.name);
+
+  room.players.sort((a, b) => {
+    return order.indexOf(a.name) - order.indexOf(b.name);
+  });
+
+  const seats = ['ton', 'nan', 'sya', 'pei'];
+  room.players.forEach((player, index) => {
+    player.seat = seats[index];
+  });
+
+  broadcastRoomState(roomId);
+}
+
+function finishSession(payload) {
+  const roomId = payload.roomId;
+  const room = rooms[roomId];
+
+  if (!room) return;
+
+  const msg = JSON.stringify({
+    type: 'navi_root',
+    payload: {}
+  });
+
+  room.players.forEach(player => {
+    if (player.socket.readyState === WebSocket.OPEN) {
+      player.socket.send(msg);
+    }
+  });
+
+  delete rooms[roomId];
+}
+
+
+
+
+function sendResumeResult(socket, payload) {
+  socket.send(JSON.stringify({
+    type: 'resume_result',
+    payload
+  }));
+}
+
+function resumeRoom(socket, payload) {
+  const roomId = payload?.roomId;
+  const playerId = payload?.playerId;
+
+  if (!roomId || !playerId) {
+    sendResumeResult(socket, { ok: false, boot: 'room', reason: 'missing_id' });
+    return;
+  }
+
+  const room = rooms[roomId];
+  if (!room) {
+    sendResumeResult(socket, { ok: false, boot: 'room', reason: 'room_not_found' });
+    return;
+  }
+
+  const player = room.players.find(p => p.playerId === playerId);
+  if (!player) {
+    sendResumeResult(socket, { ok: false, boot: 'room', reason: 'player_not_found' });
+    return;
+  }
+
+  player.socket = socket;
+
+  const seatOrder = ['ton','nan','sya','pei'];
+  const newSeat = room.newSeat ?? seatOrder
+    .map(s => room.players.find(p => p.seat === s)?.playerId)
+    .filter(Boolean);
+
+  //
+  const resPayload = {
+    ok: true,
+    boot: room.started ? 'share' : 'room',
+    snapshot: { /* 既存 */ }
+  };
+
+  console.log('resume_result payload:', resPayload.boot, resPayload.ok, {
+    started: room.started,
+    phase: room.phase,
+    gameNo: room.gameNo,
+    players: room.players.length,
+  });
+  //
+
+  sendResumeResult(socket, {
+    ok: true,
+    boot: room.started ? 'share' : 'room',
+
+    snapshot: {
+      gameNo: room.gameNo,
+      phase: room.phase,
+      initialScore: room.initialScore,
+      rule: room.rule,
+      players: room.players.map(p => ({
+        playerId: p.playerId,
+        name: p.name,
+        seat: p.seat,
+      })),
+ 
+      newSeat: newSeat,
+ 
+      history: {
+        scoreMemory: room.scoreMemory ?? null,
+        sum: room.sum ?? null,
+        gameScore: room.gameScore ?? null,
+      },
+
+      game: (room.phase === 'playing') ? {
+        round: room.round,
+        reach: room.reach,
+        gameSet: room.gameSet,
+        roundTable: room.roundTable,
+        comment: room.comment,
+        score: room.score,
+      } : null
+    }
+  });
+}
+
+
+
+
+
+
+
+
+
 wss.on('connection', (socket) => {
   console.log('client connected');
+
+  process.on('uncaughtException', err => {
+    console.error('UNCAUGHT', err);
+  });
+
+  process.on('unhandledRejection', err => {
+    console.error('UNHANDLED', err);
+  });
 
   socket.on('message', (data) => {
     let msg;
@@ -369,7 +556,7 @@ wss.on('connection', (socket) => {
 
       case 'start_game':
         console.log('start_game を受信');
-        stratGame(payload);
+        startGame(payload);
         break;
 
       case 'remove_room':
@@ -384,7 +571,22 @@ wss.on('connection', (socket) => {
 
       case 'initiative_check':
         console.log('initiative_check を受信');
-        updateSeat();
+        updateSeat(payload);
+        break;
+
+      case 'change_seat':
+        console.log('change_seat を受信');
+        changeSeat(payload);
+        break;
+
+      case 'finish_session':
+        console.log('finish_session を受信');
+        finishSession(payload);
+        break;
+
+      case 'resume_room':
+        console.log('resume_room を受信');
+        resumeRoom(socket, payload);
         break;
 
       default:
@@ -403,4 +605,5 @@ wss.on('connection', (socket) => {
   socket.on('error', (err) => {
     console.error('socket error:', err);
   });
+
 });
